@@ -4,9 +4,12 @@
 {-# HLINT ignore "Use infix" #-}
 {-# HLINT ignore "Use section" #-}
 {-# HLINT ignore "Use zipWithM" #-}
+{-# HLINT ignore "Use list comprehension" #-}
 import           Control.Monad.Trans.State
+import           Data.Bifunctor            (second)
+import qualified Data.Char                 as Char
 import qualified Data.Map                  as Map
-import qualified Data.Maybe                as Maybe
+import qualified Data.Set                  as Set
 import qualified Debug.Trace               as Debug
 
 type Name = String
@@ -73,20 +76,20 @@ data ASTTC
   | TcInt Type Int
   | TcStr Type String
   | TcId Type Name
-  | TcLet Type Name ASTTC ASTTC
+  | TcLet Type Name Type ASTTC ASTTC
   | TcAbs Type Name ASTTC
   | TcApply Type ASTTC ASTTC
   deriving (Show, Eq)
 
 typeOf :: ASTTC -> Type
-typeOf (TcUnit t)        = t
-typeOf (TcBool t n)      = t
-typeOf (TcInt t n)       = t
-typeOf (TcStr t n)       = t
-typeOf (TcId t _)        = t
-typeOf (TcLet t n i1 i2) = t
-typeOf (TcAbs t n i)     = t
-typeOf (TcApply t i1 i2) = t
+typeOf (TcUnit t)           = t
+typeOf (TcBool t n)         = t
+typeOf (TcInt t n)          = t
+typeOf (TcStr t n)          = t
+typeOf (TcId t _)           = t
+typeOf (TcLet t n t' i1 i2) = t
+typeOf (TcAbs t n i)        = t
+typeOf (TcApply t i1 i2)    = t
 
 prettyAstTc :: ASTTC -> String
 prettyAstTc (TcUnit t) = "()" ++ prettyType t
@@ -94,13 +97,13 @@ prettyAstTc (TcBool t n) = show n ++ prettyType t
 prettyAstTc (TcInt t n) = show n ++ prettyType t
 prettyAstTc (TcStr t n) = show n ++ prettyType t
 prettyAstTc (TcId t n) = n ++ prettyType t
-prettyAstTc (TcLet t n i1 i2) =
+prettyAstTc (TcLet t n t' i1 i2) =
   "(let " ++
   n ++
-  prettyType (typeOf i1) ++
+  prettyType t' ++
   " = " ++ prettyAstTc i1 ++ " in " ++ prettyAstTc i2 ++ ")" ++ prettyType t
 prettyAstTc (TcAbs t n i) =
-  "(\\ " ++ n ++ " -> " ++ prettyAstTc i ++ ")" ++ prettyType t
+  "(\\" ++ n ++ " -> " ++ prettyAstTc i ++ ")" ++ prettyType t
 prettyAstTc (TcApply t i1 i2) =
   "(app " ++ prettyAstTc i1 ++ " " ++ prettyAstTc i2 ++ ")" ++ prettyType t
 
@@ -116,8 +119,9 @@ type CheckState = (TypeVars, Int)
 newvar :: State CheckState Type
 newvar = do
   (tv, st) <- get
-  put (tv, st + 1)
-  pure $ TVar $ "t" ++ show st
+  let new = st + 1
+  put (tv, new)
+  pure $ TVar $ "t" ++ show new
 
 makeRoot :: Type -> State CheckState Type
 makeRoot (TApply n t) = do
@@ -206,6 +210,28 @@ inst (TForall quantifiers t) = do
       pure (s, t)
 inst t = pure t
 
+-- TODO do this in a nicer way
+collectNewTypeVars :: Int -> Type -> [Type]
+collectNewTypeVars n t = Set.toList $ Set.fromList $ collectNewTypeVars' n t
+  where
+    collectNewTypeVars' :: Int -> Type -> [Type]
+    collectNewTypeVars' _ t@(TConst _) = []
+    collectNewTypeVars' n t@(TVar ('t':m)) =
+      if n < read m
+        then [t]
+        else []
+    collectNewTypeVars' n t@(TApply _ ts) = concatMap (collectNewTypeVars' n) ts
+    collectNewTypeVars' n t@(TForall _ p) = collectNewTypeVars' n p
+    collectNewTypeVars' _ t@(TError _) = []
+
+qualify :: Int -> Type -> Type
+qualify n t =
+  let newTypeVars :: [Type] = collectNewTypeVars n t
+      names = fmap (\i -> [Char.chr (97 + i)]) [0 ..]
+      substitutions :: [(Type, Type)] =
+        fmap (second TVar) (zip newTypeVars names)
+   in TForall (take (length newTypeVars) names) $ foldl replace t substitutions
+
 checkSt :: (Ctx, AST) -> State CheckState ASTTC
 checkSt (ctx, AstUnit) = pure $ TcUnit tUnit
 checkSt (ctx, AstBool b) = pure $ TcBool tBool b
@@ -218,16 +244,15 @@ checkSt (ctx, Id x) = do
       t <- inst s
       pure $ TcId t x
 checkSt (ctx, Let x e0 e1) = do
+  (_, st) <- get
   e0tc <- checkSt (ctx, e0)
+  -- TODO add x = newvar to the context before checking e0 to support recursive definitions
   let t = flattenError (typeOf e0tc)
-  let newCtx = Map.insert x t ctx
+  let s = qualify st t
+  let newCtx = Map.insert x s ctx
   e1tc <- checkSt (newCtx, e1)
-  let t' = flattenError (typeOf e1tc)
-  t'' <- makeRoot t
-  -- TODO qualify new type variables in t''
-  -- let s = qualify t'' ctx
-  pure $ TcLet t'' x e0tc e1tc
-  -- TODO add x e0 to the context before checking e0 to support recursive definitions
+  t'' <- makeRoot (flattenError (typeOf e1tc))
+  pure $ TcLet t'' x s e0tc e1tc
 checkSt (ctx, Abs x e) = do
   t <- newvar
   let newCtx = Map.insert x t ctx
@@ -298,6 +323,7 @@ programs =
   , Apply (Id ">>=") (AstInt 0)
   , Abs "x" (Apply (Id "+") (Id "x"))
   , Let "$" (Abs "fn" (Abs "x" (Apply (Id "fn") (Id "x")))) (Id "$")
+  , Let "myid" (Abs "x" (Id "x")) (Apply (Id "myid") (AstInt 1))
   -- , Apply (Id ">>=") (Id "getLine")
   -- , Let "x" (Apply (Id ">>=") (Id "getLine")) (Apply (Id "x") (Id "putStr"))
   -- , Abs "x" (Apply (Id "x") (Id "x"))
