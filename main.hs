@@ -22,34 +22,36 @@ data AST
   | Apply AST AST
   deriving (Show, Eq)
 
-prettyIR :: AST -> String
-prettyIR AstUnit = "()"
-prettyIR (AstBool n) = show n
-prettyIR (AstInt n) = show n
-prettyIR (AstStr n) = show n
-prettyIR (Id n) = n
-prettyIR (Let n i1 i2) =
-  "(let " ++ n ++ " = " ++ prettyIR i1 ++ " in " ++ prettyIR i2 ++ ")"
-prettyIR (Abs n i) = "(\\" ++ n ++ " -> " ++ prettyIR i ++ ")"
-prettyIR (Apply i1 i2) = "(app " ++ prettyIR i1 ++ " " ++ prettyIR i2 ++ ")"
+prettyAst :: AST -> String
+prettyAst AstUnit = "()"
+prettyAst (AstBool n) = show n
+prettyAst (AstInt n) = show n
+prettyAst (AstStr n) = show n
+prettyAst (Id n) = n
+prettyAst (Let n i1 i2) =
+  "(let " ++ n ++ " = " ++ prettyAst i1 ++ " in " ++ prettyAst i2 ++ ")"
+prettyAst (Abs n i) = "(\\" ++ n ++ " -> " ++ prettyAst i ++ ")"
+prettyAst (Apply i1 i2) = "(app " ++ prettyAst i1 ++ " " ++ prettyAst i2 ++ ")"
 
 data Type
-  = TUnit
-  | TBool
-  | TInt
-  | TStr
+  = TConst String
   | TVar String
   | TApply String [Type]
   | TForall [String] Type
   | TError String
   deriving (Show, Eq, Ord)
 
+tUnit = TConst "()"
+
+tBool = TConst "Bool"
+
+tInt = TConst "Int"
+
+tStr = TConst "Str"
+
 tFn t0 t1 = TApply "->" [t0, t1]
 
-prettyType' TUnit = "()"
-prettyType' TBool = "B"
-prettyType' TInt = "I"
-prettyType' TStr = "S"
+prettyType' (TConst x) = x
 prettyType' (TVar x) = x
 prettyType' (TApply "->" [t0@(TApply "->" _), t1]) =
   "(" ++ prettyType' t0 ++ ")->" ++ prettyType' t1
@@ -86,21 +88,21 @@ typeOf (TcLet t n i1 i2) = t
 typeOf (TcAbs t n i)     = t
 typeOf (TcApply t i1 i2) = t
 
-prettyIRTC :: ASTTC -> String
-prettyIRTC (TcUnit t) = "()" ++ prettyType t
-prettyIRTC (TcBool t n) = show n ++ prettyType t
-prettyIRTC (TcInt t n) = show n ++ prettyType t
-prettyIRTC (TcStr t n) = show n ++ prettyType t
-prettyIRTC (TcId t n) = n ++ prettyType t
-prettyIRTC (TcLet t n i1 i2) =
+prettyAstTc :: ASTTC -> String
+prettyAstTc (TcUnit t) = "()" ++ prettyType t
+prettyAstTc (TcBool t n) = show n ++ prettyType t
+prettyAstTc (TcInt t n) = show n ++ prettyType t
+prettyAstTc (TcStr t n) = show n ++ prettyType t
+prettyAstTc (TcId t n) = n ++ prettyType t
+prettyAstTc (TcLet t n i1 i2) =
   "(let " ++
   n ++
   prettyType (typeOf i1) ++
-  " = " ++ prettyIRTC i1 ++ " in " ++ prettyIRTC i2 ++ ")" ++ prettyType t
-prettyIRTC (TcAbs t n i) =
-  "(abs " ++ n ++ " -> " ++ prettyIRTC i ++ ")" ++ prettyType t
-prettyIRTC (TcApply t i1 i2) =
-  "(app " ++ prettyIRTC i1 ++ " " ++ prettyIRTC i2 ++ ")" ++ prettyType t
+  " = " ++ prettyAstTc i1 ++ " in " ++ prettyAstTc i2 ++ ")" ++ prettyType t
+prettyAstTc (TcAbs t n i) =
+  "(\\ " ++ n ++ " -> " ++ prettyAstTc i ++ ")" ++ prettyType t
+prettyAstTc (TcApply t i1 i2) =
+  "(app " ++ prettyAstTc i1 ++ " " ++ prettyAstTc i2 ++ ")" ++ prettyType t
 
 type Ctx = Map.Map String Type
 
@@ -175,10 +177,10 @@ unify' ta@(TApply c0 p0) tb@(TApply c1 p1) =
     else pure $ Left "Different type structure"
 unify' ta tb@(TVar _) = unify' tb ta
 unify' ta@(TVar _) tb = do
-  if tb `isIn` ta
+  if ta `isIn` tb
     then pure $ Left "Infinite type"
     else do
-      setTypeReference tb ta
+      setTypeReference ta tb
       pure $ Right ()
 unify' ta tb =
   pure $
@@ -205,10 +207,10 @@ inst (TForall quantifiers t) = do
 inst t = pure t
 
 checkSt :: (Ctx, AST) -> State CheckState ASTTC
-checkSt (ctx, AstUnit) = pure $ TcUnit TUnit
-checkSt (ctx, AstBool b) = pure $ TcBool TBool b
-checkSt (ctx, AstInt i) = pure $ TcInt TInt i
-checkSt (ctx, AstStr s) = pure $ TcStr TStr s
+checkSt (ctx, AstUnit) = pure $ TcUnit tUnit
+checkSt (ctx, AstBool b) = pure $ TcBool tBool b
+checkSt (ctx, AstInt i) = pure $ TcInt tInt i
+checkSt (ctx, AstStr s) = pure $ TcStr tStr s
 checkSt (ctx, Id x) = do
   case Map.lookup x ctx of
     Nothing -> pure $ TcId (TError $ "Unbound identifier " ++ x) x
@@ -225,6 +227,7 @@ checkSt (ctx, Let x e0 e1) = do
   -- TODO qualify new type variables in t''
   -- let s = qualify t'' ctx
   pure $ TcLet t'' x e0tc e1tc
+  -- TODO add x e0 to the context before checking e0 to support recursive definitions
 checkSt (ctx, Abs x e) = do
   t <- newvar
   let newCtx = Map.insert x t ctx
@@ -244,11 +247,16 @@ checkSt (ctx, Apply e0 e1) = do
 
 binaryOp t = tFn t (tFn t t)
 
+tkvMap = TApply "Map" [TVar "k", TVar "v"]
+
 builtin :: Ctx
 builtin =
   Map.fromList
-    [ ("getLine", TApply "IO" [TStr])
-    , ("putStr", tFn TStr (TApply "IO" [TUnit]))
+    [ ("Map.empty", TForall ["k", "v"] tkvMap)
+    , ( "Map.insert"
+      , TForall ["k", "v"] (tFn (TVar "k") (tFn (TVar "v") (tFn tkvMap tkvMap))))
+    , ("getLine", TApply "IO" [tStr])
+    , ("putStr", tFn tStr (TApply "IO" [tUnit]))
     , ( ">>="
       , TForall
           ["a", "b"]
@@ -257,16 +265,15 @@ builtin =
              (tFn
                 (tFn (TVar "a") (TApply "IO" [TVar "b"]))
                 (TApply "IO" [TVar "b"]))))
-    , ("+", binaryOp TInt)
-    , ("-", binaryOp TInt)
-    , ("*", binaryOp TInt)
-    , ("++", binaryOp TStr)
-    , ("&&", binaryOp TBool)
-    , ("||", binaryOp TBool)
-    , ("x", TInt)
+    , ("+", binaryOp tInt)
+    , ("-", binaryOp tInt)
+    , ("*", binaryOp tInt)
+    , ("++", binaryOp tStr)
+    , ("&&", binaryOp tBool)
+    , ("||", binaryOp tBool)
+    , ("x", tInt)
     , ("const", TForall ["a", "b"] (tFn (TVar "a") (tFn (TVar "b") (TVar "a"))))
-    -- , ("id", TForall ["a"] (tFn (TVar "a") (TVar "a")))
-    , ("pre", tFn TStr (tFn TInt TStr))
+    , ("id", TForall ["a"] (tFn (TVar "a") (TVar "a")))
     ]
 
 check :: AST -> (ASTTC, CheckState)
@@ -277,9 +284,9 @@ mog = (>>=) getLine
 checkProgram :: AST -> IO ()
 checkProgram program = do
   putStrLn "\n@@@@@@@@@@@@@@@@@@@@@@@@@"
-  putStrLn $ prettyIR program
+  putStrLn $ prettyAst program
   let (checkedProgram, st) = check program
-  putStrLn $ prettyIRTC checkedProgram
+  putStrLn $ prettyAstTc checkedProgram
   print st
   putStrLn ""
 
@@ -298,6 +305,11 @@ programs =
   --     (Apply (Apply (Id "id") (Id ">>=")) (Apply (Id "id") (Id "getLine")))
   --     (Apply (Id "id") (Id "putStr"))
   -- , Let "id" (Abs "x" (Id "x")) (Apply (Apply (Id "pre") (Apply (Id "id") (AstStr "hello"))) (Apply (Id "id") (AstInt 1)))
+  -- , Apply (Id "Map.insert") (AstStr "key")
+  -- , Apply (Apply (Id "Map.insert") (AstStr "key")) (AstInt 1)
+  -- , Apply
+  --     (Apply (Apply (Id "Map.insert") (AstStr "key")) (AstInt 1))
+  --     (Id "Map.empty")
   ]
 
 main = do
