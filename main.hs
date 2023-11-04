@@ -1,16 +1,14 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-{-# HLINT ignore "Use <$>" #-}
-{-# HLINT ignore "Use infix" #-}
-{-# HLINT ignore "Use section" #-}
-{-# HLINT ignore "Use zipWithM" #-}
 {-# HLINT ignore "Use list comprehension" #-}
+{-# HLINT ignore "Use zipWithM" #-}
+{-# HLINT ignore "Use section" #-}
 import           Control.Monad.Trans.State
-import           Data.Bifunctor            (second)
+import qualified Data.Bifunctor            as Bifunctor
 import qualified Data.Char                 as Char
 import qualified Data.Map                  as Map
 import qualified Data.Set                  as Set
-import qualified Debug.Trace               as Debug
+import qualified System.Environment        as Environment
 
 type Name = String
 
@@ -23,7 +21,7 @@ data AST
   | Let Name AST AST
   | Abs Name AST
   | Apply AST AST
-  deriving (Show, Eq)
+  deriving (Read)
 
 prettyAst :: AST -> String
 prettyAst AstUnit = "()"
@@ -42,7 +40,7 @@ data Type
   | TApply String [Type]
   | TForall [String] Type
   | TError String
-  deriving (Show, Eq, Ord)
+  deriving (Eq, Ord)
 
 tUnit = TConst "()"
 
@@ -79,7 +77,6 @@ data ASTTC
   | TcLet Type Name Type ASTTC ASTTC
   | TcAbs Type Name ASTTC
   | TcApply Type ASTTC ASTTC
-  deriving (Show, Eq)
 
 typeOf :: ASTTC -> Type
 typeOf (TcUnit t)           = t
@@ -226,7 +223,7 @@ qualify n t =
   let newTypeVars :: [Type] = collectNewTypeVars n t
       names = fmap (\i -> [Char.chr (97 + i)]) [0 ..]
       substitutions :: [(Type, Type)] =
-        fmap (second TVar) (zip newTypeVars names)
+        fmap (Bifunctor.second TVar) (zip newTypeVars names)
    in TForall (take (length newTypeVars) names) $ foldl replace t substitutions
 
 checkSt :: (Ctx, AST) -> State CheckState ASTTC
@@ -274,11 +271,16 @@ tkvMap = TApply "Map" [TVar "k", TVar "v"]
 builtin :: Ctx
 builtin =
   Map.fromList
-    [ ("Map.empty", TForall ["k", "v"] tkvMap)
+    [ ("+", binaryOp tInt)
+    , ("-", binaryOp tInt)
+    , ("++", binaryOp tStr)
+    , ("&&", binaryOp tBool)
+    , ("||", binaryOp tBool)
+    , ("Map.empty", TForall ["k", "v"] tkvMap)
     , ( "Map.insert"
       , TForall ["k", "v"] (tFn (TVar "k") (tFn (TVar "v") (tFn tkvMap tkvMap))))
     , ("getLine", TApply "IO" [tStr])
-    , ("putStr", tFn tStr (TApply "IO" [tUnit]))
+    , ("putStrLn", tFn tStr (TApply "IO" [tUnit]))
     , ( ">>="
       , TForall
           ["a", "b"]
@@ -287,15 +289,6 @@ builtin =
              (tFn
                 (tFn (TVar "a") (TApply "IO" [TVar "b"]))
                 (TApply "IO" [TVar "b"]))))
-    , ("+", binaryOp tInt)
-    , ("-", binaryOp tInt)
-    , ("*", binaryOp tInt)
-    , ("++", binaryOp tStr)
-    , ("&&", binaryOp tBool)
-    , ("||", binaryOp tBool)
-    , ("x", tInt)
-    , ("const", TForall ["a", "b"] (tFn (TVar "a") (tFn (TVar "b") (TVar "a"))))
-    , ("id", TForall ["a"] (tFn (TVar "a") (TVar "a")))
     ]
 
 check :: AST -> (ASTTC, CheckState)
@@ -306,29 +299,8 @@ checkProgram program = do
   putStrLn $ prettyAst program
   let (checkedProgram, st) = check program
   putStrLn $ prettyAstTc checkedProgram
-  putStrLn ""
-
-programs =
-  [ Let "main" (Apply (Apply (Id "+") (AstInt 1)) (AstInt 2)) (Id "main")
-  , Apply (Apply (Id "const") (AstInt 1)) (AstInt 1)
-  , Apply (Id ">>=") (Id "getLine")
-  , Apply (Apply (Id ">>=") (Id "getLine")) (Id "putStr")
-  , Apply (Id ">>=") (AstInt 0)
-  , Abs "x" (Apply (Id "+") (Id "x"))
-  , Let "$" (Abs "fn" (Abs "x" (Apply (Id "fn") (Id "x")))) (Id "$")
-  , Let "myid" (Abs "x" (Id "x")) (Apply (Id "myid") (AstInt 1))
-  , Apply (Id ">>=") (Id "getLine")
-  , Let "x" (Apply (Id ">>=") (Id "getLine")) (Apply (Id "x") (Id "putStr"))
-  , Abs "x" (Apply (Id "x") (Id "x"))
-  , Apply
-      (Apply (Apply (Id "id") (Id ">>=")) (Apply (Id "id") (Id "getLine")))
-      (Apply (Id "id") (Id "putStr"))
-  , Apply (Id "Map.insert") (AstStr "key")
-  , Apply (Apply (Id "Map.insert") (AstStr "key")) (AstInt 1)
-  , Apply
-      (Apply (Apply (Id "Map.insert") (AstStr "key")) (AstInt 1))
-      (Id "Map.empty")
-  ]
 
 main = do
-  mapM_ checkProgram programs
+  args <- Environment.getArgs
+  prg <- read <$> readFile (head args)
+  checkProgram prg
