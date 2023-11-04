@@ -32,9 +32,9 @@ prettyAst (AstInt n) = show n
 prettyAst (AstStr n) = show n
 prettyAst (Id n) = n
 prettyAst (Let n i1 i2) =
-  "(let " ++ n ++ " = " ++ prettyAst i1 ++ " in " ++ prettyAst i2 ++ ")"
-prettyAst (Abs n i) = "(\\" ++ n ++ " -> " ++ prettyAst i ++ ")"
-prettyAst (Apply i1 i2) = "(app " ++ prettyAst i1 ++ " " ++ prettyAst i2 ++ ")"
+  "let " ++ n ++ " = " ++ prettyAst i1 ++ " in " ++ prettyAst i2
+prettyAst (Abs n i) = "\\" ++ n ++ " -> " ++ prettyAst i
+prettyAst (Apply i1 i2) = "(" ++ prettyAst i1 ++ " " ++ prettyAst i2 ++ ")"
 
 data Type
   = TConst String
@@ -105,7 +105,7 @@ prettyAstTc (TcLet t n t' i1 i2) =
 prettyAstTc (TcAbs t n i) =
   "(\\" ++ n ++ " -> " ++ prettyAstTc i ++ ")" ++ prettyType t
 prettyAstTc (TcApply t i1 i2) =
-  "(app " ++ prettyAstTc i1 ++ " " ++ prettyAstTc i2 ++ ")" ++ prettyType t
+  "(" ++ prettyAstTc i1 ++ " " ++ prettyAstTc i2 ++ ")" ++ prettyType t
 
 type Ctx = Map.Map String Type
 
@@ -152,9 +152,6 @@ unify a b = do
   ta <- find a
   tb <- find b
   unify' ta tb
-
-isVar (TVar _) = True
-isVar _        = False
 
 firstLeft :: [Either a b] -> Either a ()
 firstLeft ((Left l):es)  = Left l
@@ -304,15 +301,11 @@ builtin =
 check :: AST -> (ASTTC, CheckState)
 check p = runState (checkSt (builtin, p)) (Map.empty, 0)
 
-mog = (>>=) getLine
-
 checkProgram :: AST -> IO ()
 checkProgram program = do
-  putStrLn "\n@@@@@@@@@@@@@@@@@@@@@@@@@"
   putStrLn $ prettyAst program
   let (checkedProgram, st) = check program
   putStrLn $ prettyAstTc checkedProgram
-  print st
   putStrLn ""
 
 programs =
@@ -324,18 +317,17 @@ programs =
   , Abs "x" (Apply (Id "+") (Id "x"))
   , Let "$" (Abs "fn" (Abs "x" (Apply (Id "fn") (Id "x")))) (Id "$")
   , Let "myid" (Abs "x" (Id "x")) (Apply (Id "myid") (AstInt 1))
-  -- , Apply (Id ">>=") (Id "getLine")
-  -- , Let "x" (Apply (Id ">>=") (Id "getLine")) (Apply (Id "x") (Id "putStr"))
-  -- , Abs "x" (Apply (Id "x") (Id "x"))
-  -- , Apply
-  --     (Apply (Apply (Id "id") (Id ">>=")) (Apply (Id "id") (Id "getLine")))
-  --     (Apply (Id "id") (Id "putStr"))
-  -- , Let "id" (Abs "x" (Id "x")) (Apply (Apply (Id "pre") (Apply (Id "id") (AstStr "hello"))) (Apply (Id "id") (AstInt 1)))
-  -- , Apply (Id "Map.insert") (AstStr "key")
-  -- , Apply (Apply (Id "Map.insert") (AstStr "key")) (AstInt 1)
-  -- , Apply
-  --     (Apply (Apply (Id "Map.insert") (AstStr "key")) (AstInt 1))
-  --     (Id "Map.empty")
+  , Apply (Id ">>=") (Id "getLine")
+  , Let "x" (Apply (Id ">>=") (Id "getLine")) (Apply (Id "x") (Id "putStr"))
+  , Abs "x" (Apply (Id "x") (Id "x"))
+  , Apply
+      (Apply (Apply (Id "id") (Id ">>=")) (Apply (Id "id") (Id "getLine")))
+      (Apply (Id "id") (Id "putStr"))
+  , Apply (Id "Map.insert") (AstStr "key")
+  , Apply (Apply (Id "Map.insert") (AstStr "key")) (AstInt 1)
+  , Apply
+      (Apply (Apply (Id "Map.insert") (AstStr "key")) (AstInt 1))
+      (Id "Map.empty")
   ]
 
 main = do
